@@ -292,6 +292,7 @@ local myTeamID = nil
 local knownTransports = {}
 
 local isFactoryDef = {}
+local isFacotryWithTransportableUnits = {}
 local isNanoDef = {}
 local isTransportDef = {}
 local transportClass = {}
@@ -330,11 +331,21 @@ local function buildDefCaches()
 		end
 		if isFactory then
 			isFactoryDef[defID] = true
-			isTransportableDef[defID] = true
 		end
 
 		unitMass[defID] = ud.mass or 0
 		unitXsize[defID] = ud.xsize or 0
+	end
+
+	for defID, ud in pairs(UnitDefs) do
+		if isFactoryDef[defID] then
+			for index, pair in pairs(ud.buildOptions or {}) do
+				if isTransportableDef[pair] then
+					Echo(string.format("factotory %s has build options that can be transported", unameByDef(defID)))
+					isFacotryWithTransportableUnits[defID] = true
+				end
+			end
+		end
 	end
 end
 
@@ -1255,7 +1266,7 @@ function widget:CommandsChanged()
 	local addCustom = false
 	for i = 1, #selected do
 		local defID = GetUnitDefID(selected[i])
-		if defID and (isTransportableDef[defID] or isNanoDef[defID] or isFactoryDef[defID]) then
+		if defID and (isTransportableDef[defID] or isNanoDef[defID] or isFacotryWithTransportableUnits[defID]) then
 			addCustom = true
 		end
 	end
