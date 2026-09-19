@@ -736,16 +736,16 @@ function MetaUnitRemoved(unitID, unitDefID, unitTeam, cause)
 					-- 	)
 					-- )
 					if tstate.state == "coupled" and tstate.isLoaded == false then
-						tstate.state = "available"
-						GiveOrderToUnit(tstate.transportID, CMD_STOP, {}, CMD_OPT_INTERNAL)
-						SetUnitMoveGoal(
-							tstate.transportID,
-							tstate.homePosition.x,
-							tstate.homePosition.y,
-							tstate.homePosition.z
-						)
-						tstate.transporteeID = nil
-						Check_try_to_transport_waiting(tstate.transportID, GetUnitDefID(tstate.transportID))
+						-- tstate.state = "available"
+						-- GiveOrderToUnit(tstate.transportID, CMD_STOP, {}, CMD_OPT_INTERNAL)
+						-- SetUnitMoveGoal(
+						-- 	tstate.transportID,
+						-- 	tstate.homePosition.x,
+						-- 	tstate.homePosition.y,
+						-- 	tstate.homePosition.z
+						-- )
+						-- tstate.transporteeID = nil
+						-- Check_try_to_transport_waiting(tstate.transportID, GetUnitDefID(tstate.transportID))
 					end
 					ustate.transport_state = nil
 				end
@@ -860,7 +860,6 @@ function Check_try_to_transport_waiting(tID, unitDefID)
 				-- Echo(string.format("known transports [%s]", debug_tostring(knownTransports)))
 				-- Echo(string.format("%s transport has a score of %d", uname(tID), score))
 				if availableCount == 1 or (score >= availableCount / 2) then
-					-- Echo(string.format("%s selected to transport %s", uname(tID), uname(index)))
 					GiveOrderToUnit(tID, CMD_LOAD_UNITS, { index }, {})
 					local tstate = Get_transport_state(tID)
 					tstate.state = "coupled"
@@ -870,6 +869,7 @@ function Check_try_to_transport_waiting(tID, unitDefID)
 					ustate.isWaitingForTransport = false
 					unitsWaitingForTransport[index] = false
 					Pend_clear_movegoal[index] = true
+					Echo(string.format("%s: %s selected to transport %s", gf(), uname(tID), uname(index)))
 					break
 				end
 			end
@@ -934,6 +934,8 @@ function widget:UnitLoaded(unitID, unitDefID, unitTeam, transportID, transportTe
 			ustate.isWaitingForTransport = false
 			unitsWaitingForTransport[unitID] = false
 			if tstate.state == "coupled" and tstate.isLoaded == false then
+				Echo("s1")
+				Echo(string.format("%s: transport %s set to available by UnitLoaded", gf(), uname(tstate.transportID)))
 				tstate.state = "available"
 				Check_try_to_transport_waiting(tstate.transportID, GetUnitDefID(tstate.transportID))
 				GiveOrderToUnit(tstate.transportID, CMD_STOP, {}, {})
@@ -990,6 +992,8 @@ function Check_setMoveGoal(unitID, x, y, z, unitTeam)
 				local tstate = ustate.transport_state
 				--if the transport was about to pick up the unit but it ran out of transport-to commands on the queue then abort
 				if tstate and tstate.state == "coupled" then
+					Echo("s2")
+					Echo(string.format("%s: transport %s set to available by Check_setMoveGoal (first if)", gf(), uname(tstate.transportID)))
 					tstate.state = "available"
 					Check_try_to_transport_waiting(tstate.transportID, GetUnitDefID(tstate.transportID))
 					SetUnitMoveGoal(unitID, tstate.homePosition.x, tstate.homePosition.y, tstate.homePosition.z)
@@ -1035,11 +1039,13 @@ function widget:UnitCmdDone(unitID, unitDefID, unitTeam, cmdID, cmdParams, cmdOp
 
 	--if the transport reached the end of its queue, then return to home point
 	if isTransportDef[unitDefID] then
-		if cmdID == CMD_WAIT then
-			-- Echo(string.format("cmd done %s unit got waited and is a transport", uname(uID)))
+		if cmdID == CMD_LOAD_UNITS then
+			-- Echo(string.format("%s: cmd done %s unit got waited and is a transport", gf(),uname(uID)))
 		end
 		local tstate = Get_transport_state(unitID)
 		if tstate.state == "decoupled" and isOwnTeam and isLastInQueue then
+			Echo("s3")
+			Echo(string.format("%s: transport %s set to available by CmdDone (first if)", gf(), uname(tstate.transportID)))
 			tstate.state = "available"
 			Check_try_to_transport_waiting(tstate.transportID, GetUnitDefID(tstate.transportID))
 			SetUnitMoveGoal(unitID, tstate.homePosition.x, tstate.homePosition.y, tstate.homePosition.z)
@@ -1053,6 +1059,8 @@ function widget:UnitCmdDone(unitID, unitDefID, unitTeam, cmdID, cmdParams, cmdOp
 		unitsWaitingForTransport[unitID] = false
 		local tstate = ustate.transport_state
 		if tstate and tstate.state == "coupled" and tstate.isLoaded == false then
+			Echo("s4")
+			Echo(string.format("%s: transport %s set to available by CmdDone (second if)", gf(), uname(tstate.transportID)))
 			tstate.state = "available"
 			Check_try_to_transport_waiting(tstate.transportID, GetUnitDefID(tstate.transportID))
 			GiveOrderToUnit(tstate.transportID, CMD_STOP, {}, {})
@@ -1086,10 +1094,12 @@ function widget:UnitCmdDone(unitID, unitDefID, unitTeam, cmdID, cmdParams, cmdOp
 	--why "not comesFromEngine"?; if the player presses space (meta) to insert the command, the engine cancels the current command and calls CmdDone
 	--so unitCommand gets called with a cmd_insert and finds a transport, then CmdDone is called because the command was inserted, it would enter this branch and immediatly and cancel the order
 	--https://github.com/beyond-all-reason/RecoilEngine/blob/ce5a7f52d6c69a6ee36956d9ed13d6adb8bc0d57/rts/Sim/Units/CommandAI/CommandAI.cpp#L1196
-	elseif isTransportableDef[unitDefID] and not comesFromEngine then
+	elseif ValidUnitID(unitID) and isTransportableDef[unitDefID] and not comesFromEngine then
 		local ustate = Get_unit_state(unitID)
 		local tstate = ustate.transport_state
 		if tstate and tstate.state == "coupled" then
+			Echo("s5")
+			Echo(string.format("%s: transport %s set to available by CmdDone (third if)", gf(), uname(tstate.transportID)))
 			tstate.state = "available"
 			tstate.transporteeID = nil
 			GiveOrderToUnit(tstate.transportID, CMD_STOP, {}, {})
@@ -1313,6 +1323,8 @@ local function cmd_notify(uID, cmdID, cmdParams, cmdOpts)
 		unitsWaitingForTransport[uID] = false
 		local tstate = ustate.transport_state
 		if tstate and tstate.state == "coupled" and tstate.isLoaded == false then
+			Echo("s6")
+			Echo(string.format("%s: transport %s set to available by cmd_notify", gf(), uname(tstate.transportID)))
 			tstate.state = "available"
 			GiveOrderToUnit(tstate.transportID, CMD_STOP, {}, {})
 			SetUnitMoveGoal(tstate.transportID, tstate.homePosition.x, tstate.homePosition.y, tstate.homePosition.z)
