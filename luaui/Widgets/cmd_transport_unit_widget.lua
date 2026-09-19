@@ -8,6 +8,7 @@ unit being a factory (cant issue load command on those)
 unit reaching its destination before a transport its queued for it
 unit is given a command that cant be queued (like WAIT)
 transport is given a command that cant be queued (like WAIT)
+transports that have weapons might insert an attack command, which messes with the queues
 ]]
 
 function widget:GetInfo()
@@ -1277,7 +1278,7 @@ local function cmd_notify(uID, cmdID, cmdParams, cmdOpts)
 			ustate = Get_unit_state(tstate.transporteeID)
 		end
 		-- if
-		-- 	(tstate.state == "coupled" or tstate.state == "decoupled")
+		-- 	(tstate.state == "decoupled")
 		-- 	and not table.contains(CMD_Non_queuable, cmdID)
 		-- then
 		-- 	tstate.transporteeID = nil
