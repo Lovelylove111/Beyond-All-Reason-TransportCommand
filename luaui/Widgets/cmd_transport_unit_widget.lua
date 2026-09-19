@@ -1,4 +1,15 @@
----@diagnostic disable: param-type-mismatch, duplicate-set-field
+--[[
+list of things that will mostlikely not work when making changes:
+unit diying while a transport is about to pick it
+transport diying while a transport is about to pick it
+unit being picked up by another transport while a (widget) transport is about to pick it
+unit being a nanoframe aka in construction (cant issue a load command on those)
+unit being a factory (cant issue load command on those)
+unit reaching its destination before a transport its queued for it
+unit is given a command that cant be queued (like WAIT)
+transport is given a command that cant be queued (like WAIT)
+]]
+
 function widget:GetInfo()
 	return {
 		name = "Transport To",
@@ -211,6 +222,58 @@ local CMD_TRANSPORT_TO_DESC = {
 	name = "Transport To",
 	cursor = nil,
 	action = "transport_to",
+}
+
+local CMD_Non_queuable = {
+	CMD.FIRE_STATE,
+	CMD.MOVE_STATE,
+	CMD.SELFD,
+	CMD.ONOFF,
+	CMD.CLOAK,
+	CMD.STOCKPILE,
+	CMD.REPEAT,
+	CMD.TRAJECTORY,
+	CMD.AUTOREPAIRLEVEL,
+	CMD.LOOPBACKATTACK,
+	CMD.IDLEMODE,
+	CMD.SET_WANTED_MAX_SPEED,
+
+	GameCMD.FACTORY_GUARD,
+	GameCMD.AREA_GUARD,
+	GameCMD.STOP_PRODUCTION,
+
+	-- blueprint
+	GameCMD.BLUEPRINT_PLACE,
+	GameCMD.BLUEPRINT_CREATE,
+
+	-- quota
+	GameCMD.QUOTA_BUILD_TOGGLE,
+
+	-- AREA_MEX
+	GameCMD.SELL_UNIT,
+
+	GameCMD.CARRIER_SPAWN_ONOFF,
+	GameCMD.MORPH,
+	GameCMD.MANUAL_LAUNCH,
+	GameCMD.UNIT_SET_TARGET_NO_GROUND,
+	GameCMD.UNIT_SET_TARGET,
+	GameCMD.UNIT_CANCEL_TARGET,
+	GameCMD.UNIT_SET_TARGET_RECTANGLE,
+	GameCMD.LAND_AT,
+	GameCMD.PRIORITY,
+	GameCMD.WANT_CLOAK,
+	GameCMD.HOUND_WEAPON_TOGGLE,
+	GameCMD.SMART_TOGGLE,
+	-- AREA_ATTACK_GROUND
+}
+
+local CMD_Wait_Family = {
+	CMD.WAIT,
+	CMD.WAITCODE_DEATH,
+	CMD.WAITCODE_GATHER,
+	CMD.WAITCODE_SQUAD,
+	CMD.WAITCODE_TIME,
+	CMD.DEATHWAIT,
 }
 
 local HEAVY_TRANSPORT_MASS_THRESHOLD = 3000
@@ -589,27 +652,27 @@ function widget:Initialize()
 	Spring.AssignMouseCursor("transto", "cursortransport")
 	Spring.SetCustomCommandDrawData(CMD_TRANSPORT_TO, "transto", { 1, 1, 1, 1 })
 
-	Echo("TRANSPORT CLASIFICATIONS")
-	local r = {}
-	for def, class in pairs(transportClass) do
-		local hname = unameByDef(def)
-		r[hname] = class
-	end
-	Echo(debug_tostring(r))
-	Echo("UNIT MASSES")
-	local r = {}
-	for def, class in pairs(unitMass) do
-		local hname = unameByDef(def)
-		r[hname] = class
-	end
-	Echo(debug_tostring(r))
-	Echo("UNIT XSIZES")
-	local r = {}
-	for def, class in pairs(unitXsize) do
-		local hname = unameByDef(def)
-		r[hname] = class
-	end
-	Echo(debug_tostring(r))
+	-- Echo("TRANSPORT CLASIFICATIONS")
+	-- local r = {}
+	-- for def, class in pairs(transportClass) do
+	-- 	local hname = unameByDef(def)
+	-- 	r[hname] = class
+	-- end
+	-- Echo(debug_tostring(r))
+	-- Echo("UNIT MASSES")
+	-- local r = {}
+	-- for def, class in pairs(unitMass) do
+	-- 	local hname = unameByDef(def)
+	-- 	r[hname] = class
+	-- end
+	-- Echo(debug_tostring(r))
+	-- Echo("UNIT XSIZES")
+	-- local r = {}
+	-- for def, class in pairs(unitXsize) do
+	-- 	local hname = unameByDef(def)
+	-- 	r[hname] = class
+	-- end
+	-- Echo(debug_tostring(r))
 
 	-- WG.on_custom_formations_command_given = on_custom_formations_command_given
 end
@@ -648,13 +711,13 @@ function MetaUnitRemoved(unitID, unitDefID, unitTeam, cause)
 			if ustate then
 				local tstate = ustate.transport_state
 				if tstate then
-					Echo(
-						string.format(
-							"unit %s had assigned transport %s at the moment of death",
-							uname(unitID),
-							uname(tstate.transportID)
-						)
-					)
+					-- Echo(
+					-- 	string.format(
+					-- 		"unit %s had assigned transport %s at the moment of death",
+					-- 		uname(unitID),
+					-- 		uname(tstate.transportID)
+					-- 	)
+					-- )
 					if tstate.state == "coupled" and tstate.isLoaded == false then
 						tstate.state = "available"
 						GiveOrderToUnit(tstate.transportID, CMD_STOP, {}, CMD_OPT_INTERNAL)
@@ -746,7 +809,7 @@ function Check_try_to_transport_waiting(tID, unitDefID)
 			local transporteeType = unitRequestedType(unitDefID)
 			local transportType = transportClass[GetUnitDefID(tID)]
 			if canTransport then
-				Echo(string.format("%s can transport %s", uname(tID), uname(index)))
+				-- Echo(string.format("%s can transport %s", uname(tID), uname(index)))
 				local score = 0
 				local own_distance = distance_between_units(index, tID)
 				local own_isMatch = (transportType == transporteeType)
@@ -778,9 +841,9 @@ function Check_try_to_transport_waiting(tID, unitDefID)
 				end
 				--if you are better than 50% of them then pick you
 				-- Echo(string.format("known transports [%s]", debug_tostring(knownTransports)))
-				Echo(string.format("%s transport has a score of %d", uname(tID), score))
+				-- Echo(string.format("%s transport has a score of %d", uname(tID), score))
 				if availableCount == 1 or (score >= availableCount / 2) then
-					Echo(string.format("%s selected to transport %s", uname(tID), uname(index)))
+					-- Echo(string.format("%s selected to transport %s", uname(tID), uname(index)))
 					GiveOrderToUnit(tID, CMD_LOAD_UNITS, { index }, {})
 					local tstate = Get_transport_state(tID)
 					tstate.state = "coupled"
@@ -798,14 +861,15 @@ function Check_try_to_transport_waiting(tID, unitDefID)
 end
 
 function Check_transport_out_off_commision(tID)
-	if GetUnitTeam(tID) ~= myTeamID then return end
+	if GetUnitTeam(tID) ~= myTeamID then
+		return
+	end
 	local tstate = Get_transport_state(tID)
 	local ustate
 	if tstate.transporteeID then
 		ustate = Get_unit_state(tstate.transporteeID)
 	end
 	if tstate.isLoaded and ustate then
-		ustate.transport_state = nil
 		ustate.isWaitingForTransport = false
 		unitsWaitingForTransport[tstate.transporteeID] = false
 	elseif ustate then
@@ -823,9 +887,13 @@ function Check_transport_out_off_commision(tID)
 		-- 	GetUnitTeam(tstate.transporteeID)
 		-- )
 		local tID, tType = Check_try_to_pick_transport(tstate.transporteeID, GetUnitDefID(tstate.transporteeID))
-		if tID then
+		if not tID then
 			SetUnitMoveGoal(tstate.transporteeID, cmdParams[1], cmdParams[2], cmdParams[3])
 		end
+	end
+	if ustate then
+		tstate.transporteeID = nil
+		ustate.transport_state = nil
 	end
 end
 
@@ -847,7 +915,7 @@ function widget:UnitLoaded(unitID, unitDefID, unitTeam, transportID, transportTe
 		local tstate = ustate.transport_state
 		if tstate and tstate.transportID ~= transportID then
 			ustate.isWaitingForTransport = false
-			unitsWaitingForTransport[uID] = false
+			unitsWaitingForTransport[unitID] = false
 			if tstate.state == "coupled" and tstate.isLoaded == false then
 				tstate.state = "available"
 				Check_try_to_transport_waiting(tstate.transportID, GetUnitDefID(tstate.transportID))
@@ -915,7 +983,7 @@ function Check_setMoveGoal(unitID, x, y, z, unitTeam)
 			else
 				--still waiting for transport
 				local cmdParams = nextCommand.params
-				Echo("move goal")
+				-- Echo("move goal")
 				SetUnitMoveGoal(unitID, x, y, z)
 			end
 		end
@@ -950,6 +1018,9 @@ function widget:UnitCmdDone(unitID, unitDefID, unitTeam, cmdID, cmdParams, cmdOp
 
 	--if the transport reached the end of its queue, then return to home point
 	if isTransportDef[unitDefID] then
+		if cmdID == CMD_WAIT then
+			-- Echo(string.format("cmd done %s unit got waited and is a transport", uname(uID)))
+		end
 		local tstate = Get_transport_state(unitID)
 		if tstate.state == "decoupled" and isOwnTeam and isLastInQueue then
 			tstate.state = "available"
@@ -1196,23 +1267,30 @@ local function cmd_notify(uID, cmdID, cmdParams, cmdOpts)
 	if isFactoryDef[spGetUnitDefID(uID)] then
 		return
 	end
-	if isTransportDef[spGetUnitDefID(uID)] then
+	if isTransportDef[spGetUnitDefID(uID)] and not table.contains(CMD_Non_queuable, cmdID) then
+		if cmdID == CMD_WAIT then
+			Echo(string.format("notify %s unit got waited and is a transport", uname(uID)))
+		end
 		local tstate = Get_transport_state(uID)
 		local ustate
 		if tstate.transporteeID then
 			ustate = Get_unit_state(tstate.transporteeID)
 		end
-		Check_transport_out_off_commision(uID)
+		-- if
+		-- 	(tstate.state == "coupled" or tstate.state == "decoupled")
+		-- 	and not table.contains(CMD_Non_queuable, cmdID)
+		-- then
+		-- 	tstate.transporteeID = nil
+		-- end
 		tstate.state = "used"
-		-- tstate.isLoaded = false
-		-- tstate.transporteeID = nil
+		Check_transport_out_off_commision(uID)
 
 		if cmdID == CMD_MOVE then
 			tstate = Get_transport_state(uID)
 			tstate.homePosition = { x = cmdParams[1], y = cmdParams[2], z = cmdParams[3] }
 		end
 	end
-	if isTransportableDef[spGetUnitDefID(uID)] and cmdID ~= CMD_TRANSPORT_TO and cmdOpts.shift == false then
+	if isTransportableDef[spGetUnitDefID(uID)] and cmdID ~= CMD_TRANSPORT_TO and (cmdOpts.shift == false) then
 		local ustate = Get_unit_state(uID)
 		ustate.isWaitingForTransport = false
 		unitsWaitingForTransport[uID] = false
@@ -1245,7 +1323,6 @@ function widget:CommandNotify(cmdID, params, opts)
 end
 
 --this comes from custom formations 2
---seem to be the same as CommandNotify, but from custom formations 2
 function widget:UnitCommandNotify(uID, cmdID, cmdParams, cmdOpts)
 	-- local commandQueue = GetUnitCommands(uID, -1) or {}
 	--if the unit was shared, but the player gave new orders to it, then unflag it as shared
