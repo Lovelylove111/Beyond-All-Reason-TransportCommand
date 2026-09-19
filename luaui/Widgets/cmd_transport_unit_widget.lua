@@ -527,6 +527,11 @@ function CanTransport(transportID, unitID)
 		return false, ""
 	end
 
+	local states = Spring.GetUnitStates(transportID)
+	if CONSIDER_TRANSPORTS_IN_REPEAT == false and states["repeat"] == true then
+		return false, ""
+	end
+
 	-- local q = GetUnitCommands(transportID, 5) or {}
 	-- if #q > 0 then
 	-- 	for i = 1, #q do
