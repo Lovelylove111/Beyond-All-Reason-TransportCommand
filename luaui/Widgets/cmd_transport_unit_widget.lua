@@ -203,6 +203,7 @@ local CMD_OPT_ALT = CMD.OPT_ALT
 local CMD_OPT_CTRL = CMD.OPT_CTRL
 local CMD_OPT_INTERNAL = CMD.OPT_INTERNAL
 
+---@diagnostic disable-next-line: undefined-global
 local CMD_TRANSPORT_TO = GameCMD.TRANSPORT_TO
 local CMD_TRANSPORT_TO_DESC = {
 	id = CMD_TRANSPORT_TO,
@@ -309,7 +310,7 @@ end
 function Pick_best_transport(unitID, ux, uz, unitDefID)
 	local wantType = Get_unit_transport_type(unitDefID)
 	local bestLight, bestLightD, bestHeavy, bestHeavyD
-	for transportID in pairs(knownTransports) do
+	for transportID, pair in pairs(knownTransports) do
 		local tDefID = GetUnitDefID(transportID)
 		if tDefID then
 			local tstate = Get_transport_state(transportID)
@@ -427,6 +428,7 @@ end
 
 function Remove_unit_state(unitID)
 	unit_states[unitID] = nil
+	unitsWaitingForTransport[unitID] = nil
 end
 
 function CanTransport(transportID, unitID)
@@ -635,13 +637,48 @@ function widget:UnitGiven(unitID, unitDefID, unitTeam, newTeam)
 	end
 end
 
-function widget:MetaUnitRemoved(unitID, unitDefID, unitTeam)
+--cant use  widget:MetaUnitRemoved because it does not relay the information of the removal cause
+function MetaUnitRemoved(unitID, unitDefID, unitTeam, cause)
+	--widget:MetaUnitRemoved triggers before widget:UnitDestroyed
+	if cause == "destroyed" then
+		if unitTeam == myTeamID then
+			--if a unit is about to be transported and it dies
+			local ustate = Get_unit_state(unitID)
+			-- Echo("unit destroyed")
+			if ustate then
+				local tstate = ustate.transport_state
+				if tstate then
+					Echo(
+						string.format(
+							"unit %s had assigned transport %s at the moment of death",
+							uname(unitID),
+							uname(tstate.transportID)
+						)
+					)
+					if tstate.state == "coupled" and tstate.isLoaded == false then
+						tstate.state = "available"
+						GiveOrderToUnit(tstate.transportID, CMD_STOP, {}, CMD_OPT_INTERNAL)
+						SetUnitMoveGoal(
+							tstate.transportID,
+							tstate.homePosition.x,
+							tstate.homePosition.y,
+							tstate.homePosition.z
+						)
+						tstate.transporteeID = nil
+						Check_try_to_transport_waiting(tstate.transportID, GetUnitDefID(tstate.transportID))
+					end
+					ustate.transport_state = nil
+				end
+			end
+		end
+	end
+	-- Echo("Meta removed")
 	if isTransportDef[unitDefID] then
 		Check_transport_out_off_commision(unitID)
 	end
 	Remove_transport_state(unitID)
 	Remove_unit_state(unitID)
-	knownTransports[unitID] = false
+	knownTransports[unitID] = nil
 end
 
 function widget:MetaUnitAdded(unitID, unitDefID, teamID)
@@ -761,6 +798,7 @@ function Check_try_to_transport_waiting(tID, unitDefID)
 end
 
 function Check_transport_out_off_commision(tID)
+	if GetUnitTeam(tID) ~= myTeamID then return end
 	local tstate = Get_transport_state(tID)
 	local ustate
 	if tstate.transporteeID then
@@ -803,6 +841,23 @@ function widget:UnitIdle(unitID, unitDefID, unitTeam)
 end
 
 function widget:UnitLoaded(unitID, unitDefID, unitTeam, transportID, transportTeam)
+	local ustate = Get_unit_state(unitID)
+	if ustate then
+		--check if a transport was assigned to pick up this unit but was picked by another transport
+		local tstate = ustate.transport_state
+		if tstate and tstate.transportID ~= transportID then
+			ustate.isWaitingForTransport = false
+			unitsWaitingForTransport[uID] = false
+			if tstate.state == "coupled" and tstate.isLoaded == false then
+				tstate.state = "available"
+				Check_try_to_transport_waiting(tstate.transportID, GetUnitDefID(tstate.transportID))
+				GiveOrderToUnit(tstate.transportID, CMD_STOP, {}, {})
+				SetUnitMoveGoal(tstate.transportID, tstate.homePosition.x, tstate.homePosition.y, tstate.homePosition.z)
+				tstate.transporteeID = nil
+			end
+			ustate.transport_state = nil
+		end
+	end
 	if not transportTeam == myTeamID then
 		return
 	end
@@ -827,8 +882,13 @@ function widget:UnitUnloaded(unitID, unitDefID, unitTeam, transportID, transport
 	tstate.transporteeID = nil
 end
 
--- function widget:UnitDestroyed(unitID, unitDefID, teamID)
--- end
+function widget:UnitDestroyed(unitID, unitDefID, teamID)
+	MetaUnitRemoved(unitID, unitDefID, teamID, "destroyed")
+end
+
+function widget:UnitTaken(unitID, unitDefID, oldTeam, newTeam)
+	MetaUnitRemoved(unitID, unitDefID, oldTeam)
+end
 
 function Check_setMoveGoal(unitID, x, y, z, unitTeam)
 	local commandQueue = GetUnitCommands(unitID, -1) or {}
@@ -943,10 +1003,10 @@ function widget:UnitCmdDone(unitID, unitDefID, unitTeam, cmdID, cmdParams, cmdOp
 		local tstate = ustate.transport_state
 		if tstate and tstate.state == "coupled" then
 			tstate.state = "available"
-			Check_try_to_transport_waiting(tstate.transportID, GetUnitDefID(tstate.transportID))
 			tstate.transporteeID = nil
 			GiveOrderToUnit(tstate.transportID, CMD_STOP, {}, {})
 			SetUnitMoveGoal(tstate.transportID, tstate.homePosition.x, tstate.homePosition.y, tstate.homePosition.z)
+			Check_try_to_transport_waiting(tstate.transportID, GetUnitDefID(tstate.transportID))
 		end
 		ustate.isWaitingForTransport = false
 		unitsWaitingForTransport[unitID] = false
@@ -1159,10 +1219,10 @@ local function cmd_notify(uID, cmdID, cmdParams, cmdOpts)
 		local tstate = ustate.transport_state
 		if tstate and tstate.state == "coupled" and tstate.isLoaded == false then
 			tstate.state = "available"
-			Check_try_to_transport_waiting(tstate.transportID, GetUnitDefID(tstate.transportID))
 			GiveOrderToUnit(tstate.transportID, CMD_STOP, {}, {})
 			SetUnitMoveGoal(tstate.transportID, tstate.homePosition.x, tstate.homePosition.y, tstate.homePosition.z)
 			tstate.transporteeID = nil
+			Check_try_to_transport_waiting(tstate.transportID, GetUnitDefID(tstate.transportID))
 		end
 		ustate.transport_state = nil
 	end
@@ -1252,3 +1312,17 @@ function ClearUnitMoveGoal(unitID)
 end
 
 function widget:Shutdown() end
+
+--transport go home
+-- local ustate = Get_unit_state(uID)
+-- ustate.isWaitingForTransport = false
+-- unitsWaitingForTransport[uID] = false
+-- local tstate = ustate.transport_state
+-- if tstate and tstate.state == "coupled" and tstate.isLoaded == false then
+-- 	tstate.state = "available"
+-- 	Check_try_to_transport_waiting(tstate.transportID, GetUnitDefID(tstate.transportID))
+-- 	GiveOrderToUnit(tstate.transportID, CMD_STOP, {}, {})
+-- 	SetUnitMoveGoal(tstate.transportID, tstate.homePosition.x, tstate.homePosition.y, tstate.homePosition.z)
+-- 	tstate.transporteeID = nil
+-- end
+-- ustate.transport_state = nil
