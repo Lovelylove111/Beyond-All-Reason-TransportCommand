@@ -1,6 +1,6 @@
 --[[
-list of things that will mostlikely not work when making changes:
-unit diying while a transport is about to pick it
+things to try to check if it still works:
+unit diying while a transport is about to pick it (does it retarget to other waiting units)
 transport diying while a transport is about to pick it
 unit being picked up by another transport while a (widget) transport is about to pick it
 unit being a nanoframe aka in construction (cant issue a load command on those)
