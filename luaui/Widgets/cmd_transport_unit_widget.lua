@@ -1,14 +1,21 @@
 --[[
-things to try to check if it still works:
-unit diying while a transport is about to pick it (does it retarget to other waiting units)
-transport diying while a transport is about to pick it
-unit being picked up by another transport while a (widget) transport is about to pick it
-unit being a nanoframe aka in construction (cant issue a load command on those)
-unit being a factory (cant issue load command on those)
-unit reaching its destination before a transport its queued for it
-unit is given a command that cant be queued (like WAIT)
-transport is given a command that cant be queued (like WAIT)
-transports that have weapons might insert an attack command, which messes with the queues
+things to check:
+unit diying while a transport is about to pick it (does it retarget to other waiting units) | make sure the transport retargets
+transport diying while about to pick a unit | make sure another transport retargets
+unit being picked up by another transport while a (widget) transport is about to pick it | make sure the transport that was about to pick up retargets
+unit being a nanoframe aka in construction (cant issue a load command on those) | make sure a transport is not assgined to it
+unit being in construction -> given a transport to command -> unit finishes building | make sure a transport is assigned to it when it finishes
+unit being in construction -> given a transport to command  -> shared -> unit finishes building | make sure a transport is assigned to it when it finishes
+unit being a factory (cant issue load command on those) | make sure units out of the factory are transported
+unit reaching its destination before a transport its queued for it | make sure no transports try to target it
+unit is given a command that cant be queued (like WAIT) | dont retarget? the player expectation is kinda ambigous
+transport is given a command that cant be queued (like WAIT) | make sure another transport retargets
+transports that have weapons might insert an attack command, which messes with the queues | the player expectation is kinda ambigous
+unit is shared and a transport is about to pick it | make sure it continues
+unit is shared but there is no transport available | make sure a transport transports it when available (?)
+unit is given another transport to a new transport to command when its current command is a transport to
+commands are given while holding space
+unit is given a move command to clear a queued construction
 ]]
 
 function widget:GetInfo()
@@ -42,6 +49,7 @@ local spFindUnitCmdDesc = Spring.FindUnitCmdDesc
 local spGetUnitCmdDescs = Spring.GetUnitCmdDescs
 local spGetUnitDefID = Spring.GetUnitDefID
 local spGiveOrderToUnit = Spring.GiveOrderToUnit
+local GetUnitCurrentCommand = Spring.GetUnitCurrentCommand
 
 -- ========= helpers =========
 local function unameByDef(defID)
@@ -449,12 +457,13 @@ local transport_states = {}
 
 --[[ if a transport is about to pick a unit, and said unit is shared then;
 	The unit has been shared to our player; flag that unit as "inshared", our transport wont ever try to transport a "inshared" unit, only if the player overrides the first/current command on the queue the unit will stop being flagged as shared
-	If our player shared the unit; flag the unit a "outshared", proceed as normal, ONLY interrupt if either the transport or transportee are dead and do not retry to transport it, a unit will be unflagged if its shared back to our player ]]
+	If our player shared the unit; flag the unit a "outshared" a unit will be unflagged if its shared back to our player ]]
 ---@class T_UnitState
 ---@field outshared boolean
 ---@field inshared boolean
 ---@field transport_state TransportState|nil
 ---@field isWaitingForTransport boolean
+---@field lastKnownTransportToParams table<number, number, number>
 ---@type table<integer, T_UnitState>
 local unit_states = {}
 
@@ -704,15 +713,25 @@ function widget:PlayerChanged(playerID)
 	refreshKnownTransports()
 end
 
-function widget:UnitGiven(unitID, unitDefID, unitTeam, newTeam)
+function widget:UnitGiven(unitID, unitDefID, newTeam, unitTeam)
 	if isTransportableDef[unitDefID] then
 		if newTeam == myTeamID then
 			local ustate = Get_unit_state(unitID)
 			ustate.inshared = true
 		elseif unitTeam == myTeamID then
+			Echo(string.format("%s: unit %s was given from team %d to team %d", gf(), uname(unitID), unitTeam, newTeam))
 			local ustate = Get_unit_state(unitID)
 			ustate.outshared = true
 			Out_shared_units[unitID] = true
+			local commandQueue = GetUnitCommands(unitID, -1)
+			local currentCommand = commandQueue[1]
+			if currentCommand.id == CMD_TRANSPORT_TO then
+				ustate.lastKnownTransportToParams = {
+					currentCommand.params[1],
+					currentCommand.params[2],
+					currentCommand.params[3],
+				}
+			end
 		end
 	end
 end
@@ -738,7 +757,7 @@ function MetaUnitRemoved(unitID, unitDefID, unitTeam, cause)
 					if tstate.state == "coupled" and tstate.isLoaded == false then
 						-- tstate.state = "available"
 						-- GiveOrderToUnit(tstate.transportID, CMD_STOP, {}, CMD_OPT_INTERNAL)
-						-- SetUnitMoveGoal(
+						-- TransportCMDContinue(
 						-- 	tstate.transportID,
 						-- 	tstate.homePosition.x,
 						-- 	tstate.homePosition.y,
@@ -757,7 +776,9 @@ function MetaUnitRemoved(unitID, unitDefID, unitTeam, cause)
 		Check_transport_out_off_commision(unitID)
 	end
 	Remove_transport_state(unitID)
-	Remove_unit_state(unitID)
+	if cause ~= "taken" then
+		Remove_unit_state(unitID)
+	end
 	knownTransports[unitID] = nil
 end
 
@@ -784,6 +805,39 @@ function widget:UnitFromFactory(unitID, unitDefID)
 		Check_try_to_transport_waiting(unitID, unitDefID)
 	end
 end
+
+function widget:UnitFinished(unitID, unitDefID, unitTeam)
+	local currentCommand = GetUnitCurrentCommand(unitID)
+	if unitTeam ~= myTeamID then
+		return
+	end
+	local ustate = Get_unit_state(unitID)
+	if ustate then
+		if currentCommand == CMD_TRANSPORT_TO then
+			local ux, uy, uz = GetUnitPosition(unitID)
+			local foundTransport, transportType = Pick_best_transport(unitID, ux, uz, unitDefID)
+			if foundTransport then
+				-- Echo("Found")
+				local tstate = Get_transport_state(foundTransport)
+				-- Echo("Found2")
+				local s = GiveOrderToUnit(foundTransport, CMD_LOAD_UNITS, { unitID }, {})
+				-- Echo("Found3 " .. tostring(s))
+				tstate.state = "coupled"
+				tstate.transportID = foundTransport
+				tstate.transporteeID = unitID
+				ustate.transport_state = tstate
+				ustate.isWaitingForTransport = false
+				unitsWaitingForTransport[unitID] = false
+				-- Echo("Found4")
+			else
+				ustate.isWaitingForTransport = true
+				unitsWaitingForTransport[unitID] = true
+				TransportCMDContinue(unitID, cmdParams[1], 0, cmdParams[3]) --RPP
+			end
+		end
+	end
+end
+
 local function distance_between_units(uID, vID)
 	local ux, uy, uz = GetUnitPosition(uID)
 	local vx, vy, vz = GetUnitPosition(vID)
@@ -807,8 +861,8 @@ function Check_try_to_pick_transport(unitID, unitDefID)
 			ustate.isWaitingForTransport = false
 			unitsWaitingForTransport[unitID] = false
 			-- local treeX, treeY, treeZ = GetUnitPosition(foundTransport)
-			ClearUnitMoveGoal(unitID)
-			-- SetUnitMoveGoal(unitID, treeX, treeY, treeZ)
+			TransportCMDHold(unitID)
+			-- TransportCMDContinue(unitID, treeX, treeY, treeZ)
 			Pend_clear_movegoal[unitID] = true
 			return foundTransport, transportType
 		end
@@ -905,7 +959,7 @@ function Check_transport_out_off_commision(tID)
 		-- )
 		local tID, tType = Check_try_to_pick_transport(tstate.transporteeID, GetUnitDefID(tstate.transporteeID))
 		if not tID then
-			SetUnitMoveGoal(tstate.transporteeID, cmdParams[1], cmdParams[2], cmdParams[3])
+			TransportCMDContinue(tstate.transporteeID, cmdParams[1], cmdParams[2], cmdParams[3]) --RPP
 		end
 	end
 	if ustate then
@@ -923,6 +977,14 @@ function widget:UnitIdle(unitID, unitDefID, unitTeam)
 			Check_try_to_transport_waiting(unitID, unitDefID)
 		end
 	end
+	if isTransportableDef[unitDefID] then
+		local ustate = Get_unit_state(unitID)
+		if ustate then
+			ustate.outshared = false
+			Out_shared_units[unitID] = nil
+			ustate.inshared = false
+		end
+	end
 end
 
 function widget:UnitLoaded(unitID, unitDefID, unitTeam, transportID, transportTeam)
@@ -937,9 +999,10 @@ function widget:UnitLoaded(unitID, unitDefID, unitTeam, transportID, transportTe
 				Echo("s1")
 				Echo(string.format("%s: transport %s set to available by UnitLoaded", gf(), uname(tstate.transportID)))
 				tstate.state = "available"
+				GiveOrderToUnit(tstate.transportID, CMD_MOVE, {tstate.homePosition.x, tstate.homePosition.y, tstate.homePosition.z}, {})
 				Check_try_to_transport_waiting(tstate.transportID, GetUnitDefID(tstate.transportID))
-				GiveOrderToUnit(tstate.transportID, CMD_STOP, {}, {})
-				SetUnitMoveGoal(tstate.transportID, tstate.homePosition.x, tstate.homePosition.y, tstate.homePosition.z)
+				-- GiveOrderToUnit(tstate.transportID, CMD_STOP, {}, {})
+				-- TransportCMDContinue(tstate.transportID, tstate.homePosition.x, tstate.homePosition.y, tstate.homePosition.z)
 				tstate.transporteeID = nil
 			end
 			ustate.transport_state = nil
@@ -950,9 +1013,16 @@ function widget:UnitLoaded(unitID, unitDefID, unitTeam, transportID, transportTe
 	end
 	local tstate = Get_transport_state(transportID)
 	if tstate.state == "coupled" then
-		local r = Transform_transportTo_commands(transportID, unitID)
-		-- Echo(debug_tostring(r))
-		Spring.GiveOrderArrayToUnit(transportID, r)
+		local currentCommand = GetUnitCurrentCommand(unitID)
+		if ustate.outshared == true and currentCommand ~= CMD_TRANSPORT_TO then
+			--the player that now controls the transport has given other orders, use the last known position our player desired this unit to go
+			local lastKnownPosition = ustate.lastKnownTransportToParams
+			GiveOrderToUnit(transportID, CMD_UNLOAD_UNITS, {lastKnownPosition[1], lastKnownPosition[2], lastKnownPosition[3]}, {})
+		else
+			local r = Transform_transportTo_commands(transportID, unitID)
+			-- Echo(debug_tostring(r))
+			Spring.GiveOrderArrayToUnit(transportID, r)
+		end
 	end
 	tstate.isLoaded = true
 	tstate.transporteeID = unitID
@@ -963,6 +1033,9 @@ function widget:UnitUnloaded(unitID, unitDefID, unitTeam, transportID, transport
 	if tstate.state == "coupled" then
 		local ustate = Get_unit_state(unitID)
 		ustate.transport_state = nil
+		ustate.outshared = false
+		Out_shared_units[unitID] = nil
+		ustate.inshared = false
 		tstate.state = "decoupled"
 	end
 	tstate.isLoaded = false
@@ -974,7 +1047,7 @@ function widget:UnitDestroyed(unitID, unitDefID, teamID)
 end
 
 function widget:UnitTaken(unitID, unitDefID, oldTeam, newTeam)
-	MetaUnitRemoved(unitID, unitDefID, oldTeam)
+	MetaUnitRemoved(unitID, unitDefID, oldTeam, "taken")
 end
 
 function Check_setMoveGoal(unitID, x, y, z, unitTeam)
@@ -995,9 +1068,10 @@ function Check_setMoveGoal(unitID, x, y, z, unitTeam)
 					Echo("s2")
 					Echo(string.format("%s: transport %s set to available by Check_setMoveGoal (first if)", gf(), uname(tstate.transportID)))
 					tstate.state = "available"
-					Check_try_to_transport_waiting(tstate.transportID, GetUnitDefID(tstate.transportID))
-					SetUnitMoveGoal(unitID, tstate.homePosition.x, tstate.homePosition.y, tstate.homePosition.z)
 					tstate.transporteeID = nil
+					GiveOrderToUnit(tstate.transportID, CMD_MOVE, {tstate.homePosition.x, tstate.homePosition.y, tstate.homePosition.z}, {})
+					Check_try_to_transport_waiting(tstate.transportID, GetUnitDefID(tstate.transportID))
+					-- TransportCMDContinue(unitID, tstate.homePosition.x, tstate.homePosition.y, tstate.homePosition.z)
 					--once you become available, try to pick a waiting unit
 					Check_try_to_pick_transport(unitID, unitDefID)
 				end
@@ -1005,7 +1079,7 @@ function Check_setMoveGoal(unitID, x, y, z, unitTeam)
 				--still waiting for transport
 				local cmdParams = nextCommand.params
 				-- Echo("move goal")
-				SetUnitMoveGoal(unitID, x, y, z)
+				TransportCMDContinue(unitID, x, y, z) --RPP
 			end
 		end
 	end
@@ -1047,8 +1121,9 @@ function widget:UnitCmdDone(unitID, unitDefID, unitTeam, cmdID, cmdParams, cmdOp
 			Echo("s3")
 			Echo(string.format("%s: transport %s set to available by CmdDone (first if)", gf(), uname(tstate.transportID)))
 			tstate.state = "available"
+			GiveOrderToUnit(tstate.transportID, CMD_MOVE, {tstate.homePosition.x, tstate.homePosition.y, tstate.homePosition.z}, {})
 			Check_try_to_transport_waiting(tstate.transportID, GetUnitDefID(tstate.transportID))
-			SetUnitMoveGoal(unitID, tstate.homePosition.x, tstate.homePosition.y, tstate.homePosition.z)
+			-- TransportCMDContinue(unitID, tstate.homePosition.x, tstate.homePosition.y, tstate.homePosition.z)
 			tstate.transporteeID = nil
 		end
 	end
@@ -1062,9 +1137,10 @@ function widget:UnitCmdDone(unitID, unitDefID, unitTeam, cmdID, cmdParams, cmdOp
 			Echo("s4")
 			Echo(string.format("%s: transport %s set to available by CmdDone (second if)", gf(), uname(tstate.transportID)))
 			tstate.state = "available"
+			GiveOrderToUnit(tstate.transportID, CMD_MOVE, {tstate.homePosition.x, tstate.homePosition.y, tstate.homePosition.z}, {})
 			Check_try_to_transport_waiting(tstate.transportID, GetUnitDefID(tstate.transportID))
-			GiveOrderToUnit(tstate.transportID, CMD_STOP, {}, {})
-			SetUnitMoveGoal(tstate.transportID, tstate.homePosition.x, tstate.homePosition.y, tstate.homePosition.z)
+			-- GiveOrderToUnit(tstate.transportID, CMD_STOP, {}, {})
+			-- TransportCMDContinue(tstate.transportID, tstate.homePosition.x, tstate.homePosition.y, tstate.homePosition.z)
 			tstate.transporteeID = nil
 		end
 		ustate.transport_state = nil
@@ -1088,7 +1164,7 @@ function widget:UnitCmdDone(unitID, unitDefID, unitTeam, cmdID, cmdParams, cmdOp
 				ustate.isWaitingForTransport = true
 				unitsWaitingForTransport[unitID] = true
 				-- Check_setMoveGoal(unitID, nextParams[1], nextParams[2], nextParams[3])
-				SetUnitMoveGoal(unitID, nextParams[1], nextParams[2], nextParams[3])
+				TransportCMDContinue(unitID, nextParams[1], nextParams[2], nextParams[3]) --RPP
 			end
 		end
 	--why "not comesFromEngine"?; if the player presses space (meta) to insert the command, the engine cancels the current command and calls CmdDone
@@ -1102,8 +1178,9 @@ function widget:UnitCmdDone(unitID, unitDefID, unitTeam, cmdID, cmdParams, cmdOp
 			Echo(string.format("%s: transport %s set to available by CmdDone (third if)", gf(), uname(tstate.transportID)))
 			tstate.state = "available"
 			tstate.transporteeID = nil
-			GiveOrderToUnit(tstate.transportID, CMD_STOP, {}, {})
-			SetUnitMoveGoal(tstate.transportID, tstate.homePosition.x, tstate.homePosition.y, tstate.homePosition.z)
+			-- GiveOrderToUnit(tstate.transportID, CMD_STOP, {}, {})
+			-- TransportCMDContinue(tstate.transportID, tstate.homePosition.x, tstate.homePosition.y, tstate.homePosition.z)
+			GiveOrderToUnit(tstate.transportID, CMD_MOVE, {tstate.homePosition.x, tstate.homePosition.y, tstate.homePosition.z}, {})
 			Check_try_to_transport_waiting(tstate.transportID, GetUnitDefID(tstate.transportID))
 		end
 		ustate.isWaitingForTransport = false
@@ -1172,7 +1249,7 @@ function widget:UnitCommand(unitID, unitDefID, unitTeam, cmdID, cmdParams, cmdOp
 			else
 				ustate.isWaitingForTransport = true
 				unitsWaitingForTransport[unitID] = true
-				SetUnitMoveGoal(unitID, cmdParams[1], 0, cmdParams[3])
+				TransportCMDContinue(unitID, cmdParams[1], 0, cmdParams[3]) --RPP
 			end
 		end
 	end
@@ -1181,7 +1258,7 @@ end
 function widget:Update(dt)
 	for index, pair in pairs(Pend_clear_movegoal) do
 		if pair then
-			ClearUnitMoveGoal(index)
+			TransportCMDHold(index)
 			Pend_clear_movegoal[index] = false
 		end
 	end
@@ -1233,24 +1310,24 @@ function widget:DrawWorld()
 			a[#a + 1] = index
 		end
 	end
-	-- teamUnits = table.merge(teamUnits, a)
-	-- for i = 1, #teamUnits do
-	-- 	local unitID = teamUnits[i]
-	-- 	if isTransportableDef[unitID] and Spring.ValidUnitID(unitID) then
-	-- 		local ustate = Get_unit_state(unitID)
-	-- 		if ustate then
-	-- 			local x, y, z = GetUnitPosition(unitID)
-	-- 			local entry = string.format("%s", debug_tostring(ustate))
+	teamUnits = table.merge(teamUnits, a)
+	for i = 1, #teamUnits do
+		local unitID = teamUnits[i]
+		if isTransportableDef[unitID] and Spring.ValidUnitID(unitID) then
+			local ustate = Get_unit_state(unitID)
+			if ustate then
+				local x, y, z = GetUnitPosition(unitID)
+				local entry = string.format("%s", debug_tostring(ustate))
 
-	-- 			gl.PushPopMatrix(function()
-	-- 				gl.Color(0, 1, 0, 1) -- green text
-	-- 				gl.Translate(x, y + 40, z)
-	-- 				gl.Billboard()
-	-- 				gl.Text(entry, 0, 0, 16, "c")
-	-- 			end)
-	-- 		end
-	-- 	end
-	-- end
+				gl.PushPopMatrix(function()
+					gl.Color(0, 1, 0, 1) -- green text
+					gl.Translate(x, y + 40, z)
+					gl.Billboard()
+					gl.Text(entry, 0, 0, 16, "c")
+				end)
+			end
+		end
+	end
 
 	for unitID, ustate in pairs(unit_states) do
 		if Spring.ValidUnitID(unitID) and isTransportableDef[GetUnitDefID(unitID)] then
@@ -1326,8 +1403,8 @@ local function cmd_notify(uID, cmdID, cmdParams, cmdOpts)
 			Echo("s6")
 			Echo(string.format("%s: transport %s set to available by cmd_notify", gf(), uname(tstate.transportID)))
 			tstate.state = "available"
-			GiveOrderToUnit(tstate.transportID, CMD_STOP, {}, {})
-			SetUnitMoveGoal(tstate.transportID, tstate.homePosition.x, tstate.homePosition.y, tstate.homePosition.z)
+			GiveOrderToUnit(tstate.transportID, CMD_MOVE, {tstate.homePosition.x, tstate.homePosition.y, tstate.homePosition.z}, {})
+			-- TransportCMDContinue(tstate.transportID, tstate.homePosition.x, tstate.homePosition.y, tstate.homePosition.z)
 			tstate.transporteeID = nil
 			Check_try_to_transport_waiting(tstate.transportID, GetUnitDefID(tstate.transportID))
 		end
@@ -1365,56 +1442,22 @@ function widget:UnitCommandNotify(uID, cmdID, cmdParams, cmdOpts)
 	cmd_notify(uID, cmdID, cmdParams, cmdOpts)
 end
 
---this comes from custom formations 2 (added by the PR that also added this widget)
---its called before custom formations 2 gives orders
-function widget:OrderGivenToUnitsArr(uArr, oArr)
-	-- 	local transport_to_command_found = false
-	-- 	for index, order in ipairs(oArr) do
-	-- 		cmdID = order[1]
-	-- 		params = order[2]
-	-- 		options = order[3]
-
-	-- 		if cmdID == CMD_TRANSPORT_TO then
-	-- 			transport_to_command_found = true
-	-- 		end
-	-- 	end
-	-- 	--fuck it, just go back to where ever the player left u
-	-- 	local unitDefID = spGetUnitDefID(uID)
-	-- 	if isTransportDef[unitDefID] and cmdID == CMD_MOVE then
-	-- --[[ 		Echo("updating start position, notify")
-	-- 		transportStartPosition[uID] = cmdParams ]]
-	-- 		local tstate = Get_transport_state(uID)
-	-- 	end
-end
-
---Widgets cant call these functions, so we need the gadget to do it
-function SetUnitMoveGoal(unitID, x, y, z)
-	if not unitID or not x or not y or not z then
+--Widgets cant call these functions directly, so we send LuaRules messages.
+function TransportCMDContinue(unitID)
+	if not unitID then
 		return
 	end
-	local msg = string.format("POS|%d|%f|%f|%f", unitID, x, y, z)
+	-- BREAKCHECK: x/y/z args from old callers are intentionally ignored; synced side uses current CMD_TRANSPORT_TO params.
+	local msg = string.format("POS|%d", unitID)
 	Spring.SendLuaRulesMsg(msg)
-	-- spGiveOrderToUnit(
-	-- 	unitID,
-	-- 	CMD_INSERT,
-	-- 	{0, CMD_MOVE, CMD.OPT_SHIFT+CMD.OPT_INTERNAL, x, y, z },
-	-- 	{ "alt" }
-	-- )
 end
 
-function ClearUnitMoveGoal(unitID)
+function TransportCMDHold(unitID)
 	if not unitID then
 		return
 	end
 	local msg = string.format("TSTP|%d", unitID)
 	Spring.SendLuaRulesMsg(msg)
-	-- local x, y, z = GetUnitPosition(unitID)
-	-- spGiveOrderToUnit(
-	-- 	unitID,
-	-- 	CMD_INSERT,
-	-- 	{0, CMD_STOP, CMD.OPT_SHIFT+CMD.OPT_INTERNAL, x, y, z },
-	-- 	{ "alt" }
-	-- )
 end
 
 function widget:Shutdown() end
@@ -1428,7 +1471,7 @@ function widget:Shutdown() end
 -- 	tstate.state = "available"
 -- 	Check_try_to_transport_waiting(tstate.transportID, GetUnitDefID(tstate.transportID))
 -- 	GiveOrderToUnit(tstate.transportID, CMD_STOP, {}, {})
--- 	SetUnitMoveGoal(tstate.transportID, tstate.homePosition.x, tstate.homePosition.y, tstate.homePosition.z)
+-- 	TransportCMDContinue(tstate.transportID, tstate.homePosition.x, tstate.homePosition.y, tstate.homePosition.z)
 -- 	tstate.transporteeID = nil
 -- end
 -- ustate.transport_state = nil

@@ -22,6 +22,8 @@ end
 local Echo = Spring.Echo
 local GameFrame = Spring.GetGameFrame
 local GetUnitDefID = Spring.GetUnitDefID
+local GetUnitCurrentCommand = Spring.GetUnitCurrentCommand
+local GetUnitCommands = Spring.GetUnitCommands
 
 local CMDTYPE_ICON_MAP = CMDTYPE.ICON_MAP
 local CMD_LOAD_UNITS = CMD.LOAD_UNITS
@@ -121,34 +123,31 @@ function gadget:UnitUnloaded(unitID, unitDefID, teamID, transportID)
 	loadedUnits[unitID] = nil
 end
 
---this is here to expose setgoal and cleargoal for widgets to use
+--this is here to expose TransportCMDContinue / TransportCMDHold for widgets to use
+--only works if the units is executing a CMD_TRANSPORT_TO to prevent other widgets from abusing this for illegal unit control
 function gadget:RecvLuaMsg(msg, playerID)
-	--TODO: add checks to verify if the unit actually belongs to the player sending the message
 	local _, _, _, teamID = Spring.GetPlayerInfo(playerID)
+
 	if msg:sub(1, 4) == "POS|" then
-		local _, unitID, x, y, z = msg:match("([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)")
-
-		unitID = tonumber(unitID)
-		if Spring.GetUnitTeam(unitID) == teamID then
-			x, y, z = tonumber(x), tonumber(y), tonumber(z)
-
-			if unitID and x and y and z then
-				-- Echo("Setting move goal")
-				-- Do something with the data here, e.g. issue orders, update state
-				Spring.SetUnitMoveGoal(unitID, x, y, z)
+		local unitID = tonumber(msg:match("^POS|([^|]+)"))
+		if unitID and Spring.GetUnitTeam(unitID) == teamID then
+			-- BREAKCHECK: current command may be CMD_INSERT instead of CMD_TRANSPORT_TO when meta-inserted.
+			-- BREAKCHECK: if the command queue advances before this message arrives, this becomes a no-op.
+			local commandQueue = GetUnitCommands(unitID, -1) or {}
+			local currentCommand = commandQueue[1]
+			if currentCommand and currentCommand.id == CMD_TRANSPORT_TO then
+				Spring.SetUnitMoveGoal(unitID, currentCommand.params[1], currentCommand.params[2], currentCommand.params[3])
 			end
-			return true -- handled
+			return true
 		end
 	elseif msg:sub(1, 4) == "TSTP" then
-		-- Decode TSTP message
-		local _, unitID = msg:match("([^|]+)|([^|]+)")
-
-		unitID = tonumber(unitID)
-		if Spring.GetUnitTeam(unitID) == teamID then
-			if unitID then
-				-- Echo("Clearing move goal")
+		local unitID = tonumber(msg:match("^TSTP|([^|]+)"))
+		if unitID and Spring.GetUnitTeam(unitID) == teamID then
+			-- BREAKCHECK: same current-command race as above.
+			-- BREAKCHECK: original TSTP also set move goal to current position to stop; kept here.
+			local cmdID = GetUnitCurrentCommand(unitID)
+			if cmdID == CMD_TRANSPORT_TO then
 				local x, y, z = Spring.GetUnitPosition(unitID)
-				-- Do something with the unitID
 				Spring.ClearUnitGoal(unitID)
 				Spring.SetUnitMoveGoal(unitID, x, y, z)
 			end
